@@ -33,9 +33,9 @@
     }
     .tabs {
       display: flex;
+      flex-wrap: wrap;
       gap: 8px;
       margin-bottom: 16px;
-      flex-wrap: wrap;
     }
     .tab-btn {
       border-radius: 999px;
@@ -71,8 +71,8 @@
     }
     .controls {
       display: flex;
-      gap: 8px;
       flex-wrap: wrap;
+      gap: 8px;
       margin-top: 12px;
     }
     button {
@@ -96,9 +96,7 @@
       opacity: 0.5;
       cursor: default;
     }
-    .hidden {
-      display: none;
-    }
+    .hidden { display: none; }
     input[type="text"], textarea {
       width: 100%;
       box-sizing: border-box;
@@ -109,9 +107,7 @@
       margin-top: 6px;
       font-family: inherit;
     }
-    textarea {
-      resize: vertical;
-    }
+    textarea { resize: vertical; }
     .field-label {
       font-size: 0.75rem;
       text-transform: uppercase;
@@ -169,7 +165,6 @@
   <h1>Chinese Finance Trainer</h1>
   <div class="subtitle">Flashcards · Reading · Speaking · Audio · Spaced repetition</div>
 
-  <!-- Tabs -->
   <div class="tabs">
     <button class="tab-btn active" data-tab="flashcards">Flashcards</button>
     <button class="tab-btn" data-tab="reading">Reading</button>
@@ -202,15 +197,19 @@
       <span id="rd-count" class="badge"></span>
     </h2>
     <div id="reading-content"></div>
+    <div class="field-label">Your English understanding</div>
+    <textarea id="rd-answer" rows="3" placeholder="Type your translation or summary in English..."></textarea>
     <div class="controls">
       <button id="rd-audio-btn">🔊 Play sentence</button>
       <button id="rd-toggle-py-btn">Toggle pinyin</button>
-      <button id="rd-toggle-en-btn">Toggle translation</button>
-      <button id="rd-next-btn">Next</button>
+      <button id="rd-toggle-en-btn">Toggle reference translation</button>
+      <button id="rd-check-answer-btn" class="primary">Check comprehension</button>
+      <button id="rd-next-btn">Next sentence</button>
       <button id="rd-refresh-btn">Refresh Caixin finance sentences</button>
     </div>
+    <div id="rd-feedback" class="status"></div>
     <div class="muted" style="margin-top:8px;">
-      Caixin headlines are loaded via RSS (through a CORS-safe proxy). Many will not have pinyin or translation prefilled, but they are still good for reading practice.
+      Caixin headlines are loaded via RSS (through a CORS-safe proxy). Many items don’t have reference English, so the comprehension check is partly self-assessment for those.
     </div>
   </section>
 
@@ -235,11 +234,9 @@
 </div>
 
 <script>
-/*
-  ========================================
-  DATA: Core finance terms & seed sentences
-  ========================================
-*/
+/* ===============================
+   DATA: Finance terms & sentences
+   =============================== */
 const TERMS = [
   { zh: "股票",       pinyin: "gǔ piào",                  en: "stock; equity" },
   { zh: "债券",       pinyin: "zhài quàn",                en: "bond" },
@@ -263,7 +260,7 @@ const TERMS = [
   { zh: "监管机构",   pinyin: "jiān guǎn jī gòu",        en: "regulator; supervisory authority" }
 ];
 
-// Seed sentences; Caixin RSS will append to this
+// Seed reading sentences (with reference EN). Caixin RSS items will be appended.
 let readingSentences = [
   {
     zh: "中国的利率政策会直接影响人民币汇率。",
@@ -274,14 +271,17 @@ let readingSentences = [
     zh: "投资银行正在帮助客户在香港发行美元债券。",
     pinyin: "Tóu zī yín háng zhèng zài bāng zhù kè hù zài Xiāng gǎng fā xíng měi yuán zhài quàn.",
     en: "The investment bank is helping a client issue USD bonds in Hong Kong."
+  },
+  {
+    zh: "如果现金流紧张，银行可能会收紧贷款条件。",
+    pinyin: "Rú guǒ xiàn jīn liú jǐn zhāng, yín háng kě néng huì shōu jǐn dài kuǎn tiáo jiàn.",
+    en: "If cash flow is tight, banks may tighten lending conditions."
   }
 ];
 
-/*
-  ========================================
-  Utilities: Pinyin normalization & tones
-  ========================================
-*/
+/* ===============================
+   Pinyin utils
+   =============================== */
 const DIACRITIC_MAP = {
   'ā':{base:'a',tone:1}, 'á':{base:'a',tone:2}, 'ǎ':{base:'a',tone:3}, 'à':{base:'a',tone:4},
   'ē':{base:'e',tone:1}, 'é':{base:'e',tone:2}, 'ě':{base:'e',tone:3}, 'è':{base:'e',tone:4},
@@ -291,7 +291,6 @@ const DIACRITIC_MAP = {
   'ǖ':{base:'ü',tone:1}, 'ǘ':{base:'ü',tone:2}, 'ǚ':{base:'ü',tone:3}, 'ǜ':{base:'ü',tone:4}
 };
 
-// remove tone marks & digits; keep base letters
 function normalizePinyinPlain(str) {
   if (!str) return "";
   let out = "";
@@ -299,9 +298,9 @@ function normalizePinyinPlain(str) {
     if (DIACRITIC_MAP[ch]) {
       out += DIACRITIC_MAP[ch].base;
     } else if (ch >= '0' && ch <= '9') {
-      // skip tones digits
+      // skip tone digits
     } else if (ch === ' ' || ch === "'" || ch === "’" || ch === "，" || ch === ",") {
-      // skip / normalize separators
+      // skip separators
     } else {
       out += ch;
     }
@@ -309,7 +308,6 @@ function normalizePinyinPlain(str) {
   return out.replace(/[^a-zü]/g, "");
 }
 
-// extract tone (1-4 or 0) from a syllable
 function extractToneFromSyllable(syl) {
   for (const ch of syl) {
     if (DIACRITIC_MAP[ch]) return DIACRITIC_MAP[ch].tone;
@@ -318,53 +316,41 @@ function extractToneFromSyllable(syl) {
   return 0;
 }
 
-/*
-  ========================================
-  SRS (Spaced Repetition) - "Medium"
-  ========================================
-*/
-const SRS_KEY = "cn_finance_srs_v1"; // localStorage key
-
-// structure: { [zh]: { intervalDays, dueAtMs, reps } }
+/* ===============================
+   SRS (medium intensity)
+   =============================== */
+const SRS_KEY = "cn_finance_srs_v1";
 let srsState = {};
 try {
   const raw = localStorage.getItem(SRS_KEY);
   if (raw) srsState = JSON.parse(raw);
-} catch (e) {
-  srsState = {};
-}
+} catch (e) { srsState = {}; }
 
 function saveSRS() {
   localStorage.setItem(SRS_KEY, JSON.stringify(srsState));
 }
 
-// Compute list of indices that are "due" today
+// indices of cards that are due; if none, unknown; if none, fallback all
 function getDueOrder() {
   const now = Date.now();
   const due = [];
   const unknown = [];
   TERMS.forEach((t, idx) => {
     const st = srsState[t.zh];
-    if (!st) {
-      unknown.push(idx);
-    } else if (st.dueAtMs <= now) {
-      due.push(idx);
-    }
+    if (!st) unknown.push(idx);
+    else if (st.dueAtMs <= now) due.push(idx);
   });
-  // Priority: due first, then unknown; if nothing, fallback all
   if (due.length > 0) return due;
   if (unknown.length > 0) return unknown;
-  return TERMS.map((t, idx) => idx);
+  return TERMS.map((_, i) => i);
 }
 
-// Simple medium-intensity update
 function updateSRS(zh, rating) {
   const now = Date.now();
   const dayMs = 86400000;
   let st = srsState[zh] || { intervalDays: 0, dueAtMs: now, reps: 0 };
 
   if (rating === "known") {
-    // medium Anki-like: 0 -> 1d -> 3d -> 7d -> 16d -> ...
     let iv = st.intervalDays;
     if (iv === 0) iv = 1;
     else if (iv < 3) iv = 3;
@@ -375,21 +361,17 @@ function updateSRS(zh, rating) {
     st.dueAtMs = now + iv * dayMs;
     st.reps = (st.reps || 0) + 1;
   } else if (rating === "learning") {
-    // keep interval small
     st.intervalDays = 0;
     st.dueAtMs = now + 10 * 60 * 1000; // 10 minutes
-    st.reps = (st.reps || 0);
   }
 
   srsState[zh] = st;
   saveSRS();
 }
 
-/*
-  ========================================
-  Flashcards logic
-  ========================================
-*/
+/* ===============================
+   Flashcards
+   =============================== */
 const fcContentEl    = document.getElementById("flashcard-content");
 const fcAudioBtn     = document.getElementById("fc-audio-btn");
 const fcCheckBtn     = document.getElementById("fc-check-btn");
@@ -409,30 +391,32 @@ function currentTerm() {
 }
 
 function renderFlashcard() {
-  const { term, idx } = currentTerm();
+  const { term } = currentTerm();
   const srs = srsState[term.zh];
 
-  // top status badges
   fcProgressEl.textContent = `Card ${fcIndex + 1} of ${fcOrder.length}`;
   const dueOrder = getDueOrder();
-  const dueCount = dueOrder.length;
-  if (dueCount === TERMS.length) {
-    fcDueBadgeEl.textContent = `All cards (no SRS data yet)`;
-  } else if (dueCount === 0) {
+  if (dueOrder.length === TERMS.length) {
+    fcDueBadgeEl.textContent = `All cards (no SRS yet)`;
+  } else if (dueOrder.length === 0) {
     fcDueBadgeEl.textContent = `All caught up 🎉`;
   } else {
-    fcDueBadgeEl.textContent = `${dueCount} due now`;
+    fcDueBadgeEl.textContent = `${dueOrder.length} due now`;
   }
 
-  // build tone quiz row
+  const statusLabel = !srs ? "New" : (srs.intervalDays === 0 ? "Learning" : "Review");
+
+  // tone quiz: do NOT show pinyin in labels
   const syllables = term.pinyin.split(/\s+/).filter(Boolean);
-  let toneHtml = `<div class="field-label">Tone quiz</div>
-                  <div class="muted">Choose the tone (1–4 or 0) for each syllable.</div>
-                  <div class="tone-row">`;
-  syllables.forEach((syl, i) => {
+  let toneHtml = `
+    <div class="field-label">Tone quiz</div>
+    <div class="muted">Select tone (1–4 or 0) for each syllable, from memory.</div>
+    <div class="tone-row">
+  `;
+  syllables.forEach((_, i) => {
     toneHtml += `
       <label>
-        <span>${syl}</span>
+        <span>Syllable ${i + 1}</span>
         <select data-syll-idx="${i}">
           <option value="">?</option>
           <option value="1">1</option>
@@ -446,30 +430,25 @@ function renderFlashcard() {
   });
   toneHtml += `</div>`;
 
-  const statusLabel = !srs ? "New" : (srs.intervalDays === 0 ? "Learning" : "Review");
-
   fcContentEl.innerHTML = `
     <div class="highlight-zh">${term.zh}</div>
     <div class="muted">Status: ${statusLabel}</div>
     <button id="fc-inner-audio" style="margin-top:6px; margin-bottom:8px;">🔊 Play "${term.zh}"</button>
-    <div class="field-label">Type pinyin (tones optional)</div>
-    <input type="text" id="fc-pinyin-input" placeholder="e.g., gupiao / gu3piao4 / gǔpiào" />
+    <div class="field-label">Type pinyin (without tones)</div>
+    <input type="text" id="fc-pinyin-input" placeholder="e.g., gupiao / gu piao" />
     ${toneHtml}
     <div id="fc-feedback" class="status"></div>
   `;
 
-  // inner audio button
   document.getElementById("fc-inner-audio").addEventListener("click", () => {
     playChineseTTS(term.zh);
   });
 
-  // hide post-answer buttons until check
   fcNextBtn.classList.add("hidden");
   fcKnewBtn.classList.add("hidden");
   fcLearningBtn.classList.add("hidden");
 }
 
-// pinyin + tone check combined
 function checkFlashcardAnswer() {
   const { term } = currentTerm();
   const inputEl = document.getElementById("fc-pinyin-input");
@@ -482,17 +461,14 @@ function checkFlashcardAnswer() {
     fbEl.className = "status warn";
     return;
   }
-
   const targetNorm = normalizePinyinPlain(term.pinyin);
   const userNorm   = normalizePinyinPlain(userRaw);
-
   let score = 0;
   for (let i=0;i<Math.min(targetNorm.length, userNorm.length);i++) {
     if (targetNorm[i] === userNorm[i]) score++;
   }
   const ratio = targetNorm.length ? score / targetNorm.length : 0;
 
-  // tone scoring
   const syllables = term.pinyin.split(/\s+/).filter(Boolean);
   const correctTones = syllables.map(extractToneFromSyllable);
   const selects = fcContentEl.querySelectorAll("select[data-syll-idx]");
@@ -501,7 +477,6 @@ function checkFlashcardAnswer() {
     const v = sel.value === "" ? null : parseInt(sel.value, 10);
     userTones.push(v);
   });
-
   let toneCorrect = 0;
   correctTones.forEach((t, i) => {
     if (t === userTones[i]) toneCorrect++;
@@ -511,7 +486,6 @@ function checkFlashcardAnswer() {
              Tones: ${toneCorrect}/${correctTones.length} correct.<br/>
              <span class="highlight-py">${term.pinyin}</span>
              <div class="highlight-en">${term.en}</div>`;
-
   let cls = "status warn";
   if (ratio > 0.85 && toneCorrect === correctTones.length) cls = "status good";
   else if (ratio < 0.5 || toneCorrect === 0) cls = "status bad";
@@ -519,22 +493,17 @@ function checkFlashcardAnswer() {
   fbEl.innerHTML = msg;
   fbEl.className = cls;
 
-  // Show SRS buttons now
   fcNextBtn.classList.remove("hidden");
   fcKnewBtn.classList.remove("hidden");
   fcLearningBtn.classList.remove("hidden");
 }
 
 fcCheckBtn.addEventListener("click", checkFlashcardAnswer);
-
-// Next: advance within current due order
 fcNextBtn.addEventListener("click", () => {
   if (fcOrder.length === 0) fcOrder = getDueOrder();
   fcIndex = (fcIndex + 1) % fcOrder.length;
   renderFlashcard();
 });
-
-// I knew it: update SRS, then next
 fcKnewBtn.addEventListener("click", () => {
   const { term } = currentTerm();
   updateSRS(term.zh, "known");
@@ -542,8 +511,6 @@ fcKnewBtn.addEventListener("click", () => {
   fcIndex = 0;
   renderFlashcard();
 });
-
-// Still learning: update SRS as learning, then next
 fcLearningBtn.addEventListener("click", () => {
   const { term } = currentTerm();
   updateSRS(term.zh, "learning");
@@ -551,18 +518,14 @@ fcLearningBtn.addEventListener("click", () => {
   fcIndex = 0;
   renderFlashcard();
 });
-
-// global audio button
 fcAudioBtn.addEventListener("click", () => {
   const { term } = currentTerm();
   playChineseTTS(term.zh);
 });
 
-/*
-  ========================================
-  Browser TTS for Chinese (zh-CN)
-  ========================================
-*/
+/* ===============================
+   Browser TTS (zh-CN)
+   =============================== */
 function playChineseTTS(text) {
   if (!("speechSynthesis" in window)) {
     alert("Speech synthesis is not supported in this browser.");
@@ -570,49 +533,45 @@ function playChineseTTS(text) {
   }
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = "zh-CN";
-  // Try to prefer a zh-CN voice, if available
   const voices = window.speechSynthesis.getVoices() || [];
-  const zhVoice = voices.find(v => v.lang.startsWith("zh"));
+  const zhVoice = voices.find(v => v.lang && v.lang.startsWith("zh"));
   if (zhVoice) utter.voice = zhVoice;
-  window.speechSynthesis.cancel(); // stop any ongoing speech
+  window.speechSynthesis.cancel();
   window.speechSynthesis.speak(utter);
 }
 
-/*
-  ========================================
-  Reading: Caixin RSS + controls
-  ========================================
-*/
-const rdContentEl   = document.getElementById("reading-content");
-const rdCountEl     = document.getElementById("rd-count");
-const rdAudioBtn    = document.getElementById("rd-audio-btn");
-const rdTogglePyBtn = document.getElementById("rd-toggle-py-btn");
-const rdToggleEnBtn = document.getElementById("rd-toggle-en-btn");
-const rdNextBtn     = document.getElementById("rd-next-btn");
-const rdRefreshBtn  = document.getElementById("rd-refresh-btn");
+/* ===============================
+   Reading: Caixin RSS + test
+   =============================== */
+const rdContentEl     = document.getElementById("reading-content");
+const rdCountEl       = document.getElementById("rd-count");
+const rdAnswerEl      = document.getElementById("rd-answer");
+const rdAudioBtn      = document.getElementById("rd-audio-btn");
+const rdTogglePyBtn   = document.getElementById("rd-toggle-py-btn");
+const rdToggleEnBtn   = document.getElementById("rd-toggle-en-btn");
+const rdCheckBtn      = document.getElementById("rd-check-answer-btn");
+const rdNextBtn       = document.getElementById("rd-next-btn");
+const rdRefreshBtn    = document.getElementById("rd-refresh-btn");
+const rdFeedbackEl    = document.getElementById("rd-feedback");
 
 let rdIndex = 0;
 let rdShowPinyin = false;
 let rdShowEnglish = false;
 
-// Caixin RSS via CORS-friendly proxy
 const RSS_SOURCE = "https://rsshub.app/caixin/latest";
 const RSS_PROXY  = "https://api.allorigins.win/get?url=";
 
 async function refreshCaixinSentences(force = false) {
   try {
-    const lsKey = "cn_finance_caixin_cache_v1";
-    const metaKey = "cn_finance_caixin_meta_v1";
-    const lastMeta = JSON.parse(localStorage.getItem(metaKey) || "{}");
-    const now = Date.now();
-    const dayMs = 24 * 60 * 60 * 1000;
+    const cacheKey = "cn_finance_caixin_cache_v1";
+    const metaKey  = "cn_finance_caixin_meta_v1";
+    const meta     = JSON.parse(localStorage.getItem(metaKey) || "{}");
+    const now      = Date.now();
+    const dayMs    = 24 * 60 * 60 * 1000;
 
-    if (!force && lastMeta.lastFetch && (now - lastMeta.lastFetch) < dayMs) {
-      // within 24h: use cached
-      const cached = JSON.parse(localStorage.getItem(lsKey) || "[]");
-      if (cached.length > 0) {
-        readingSentences = readingSentences.concat(cached);
-      }
+    if (!force && meta.lastFetch && (now - meta.lastFetch) < dayMs) {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) || "[]");
+      if (cached.length) readingSentences = readingSentences.concat(cached);
       return;
     }
 
@@ -628,15 +587,11 @@ async function refreshCaixinSentences(force = false) {
     const items = Array.from(doc.querySelectorAll("item, entry"));
     const mapped = items.slice(0, 15).map(item => {
       const title = item.querySelector("title")?.textContent || "";
-      return {
-        zh: title,
-        pinyin: "",  // left blank; still useful for reading
-        en: ""       // no automatic translation here
-      };
+      return { zh: title, pinyin: "", en: "" };
     }).filter(x => x.zh);
 
-    if (mapped.length > 0) {
-      localStorage.setItem(lsKey, JSON.stringify(mapped));
+    if (mapped.length) {
+      localStorage.setItem(cacheKey, JSON.stringify(mapped));
       localStorage.setItem(metaKey, JSON.stringify({ lastFetch: now }));
       readingSentences = readingSentences.concat(mapped);
     }
@@ -654,7 +609,6 @@ function renderReading() {
   if (rdIndex >= readingSentences.length) rdIndex = 0;
   const s = readingSentences[rdIndex];
   rdCountEl.textContent = `Sentence ${rdIndex + 1} of ${readingSentences.length}`;
-
   let html = `<div class="highlight-zh">${s.zh}</div>`;
   if (rdShowPinyin && s.pinyin) {
     html += `<div class="highlight-py">${s.pinyin}</div>`;
@@ -663,10 +617,13 @@ function renderReading() {
   }
   if (rdShowEnglish && s.en) {
     html += `<div class="highlight-en">${s.en}</div>`;
-  } else if (rdShowEnglish && !s.en) {
-    html += `<div class="muted">No English translation available.</div>`;
+  } else if (rdShowEnglish && !s.en && rdShowEnglish) {
+    html += `<div class="muted">No reference English translation stored for this item.</div>`;
   }
   rdContentEl.innerHTML = html;
+  rdFeedbackEl.textContent = "";
+  rdFeedbackEl.className = "status";
+  rdAnswerEl.value = "";
 }
 
 rdTogglePyBtn.addEventListener("click", () => {
@@ -682,36 +639,75 @@ rdNextBtn.addEventListener("click", () => {
   renderReading();
 });
 rdAudioBtn.addEventListener("click", () => {
-  if (readingSentences.length === 0) return;
-  const s = readingSentences[rdIndex];
-  playChineseTTS(s.zh);
+  if (!readingSentences.length) return;
+  playChineseTTS(readingSentences[rdIndex].zh);
 });
+
+function similarity(a, b) {
+  const norm = s => (s || "").toLowerCase()
+    .replace(/[^a-z0-9\s]/g," ")
+    .replace(/\s+/g," ")
+    .trim();
+  const sa = norm(a).split(" ").filter(Boolean);
+  const sb = norm(b).split(" ").filter(Boolean);
+  if (!sa.length || !sb.length) return 0;
+  const setB = new Set(sb);
+  let match = 0;
+  sa.forEach(w => { if (setB.has(w)) match++; });
+  return match / sb.length;
+}
+
+rdCheckBtn.addEventListener("click", () => {
+  const s = readingSentences[rdIndex];
+  const ans = (rdAnswerEl.value || "").trim();
+  if (!ans) {
+    rdFeedbackEl.textContent = "Type your English understanding first.";
+    rdFeedbackEl.className = "status warn";
+    return;
+  }
+
+  if (s.en) {
+    const sim = similarity(ans, s.en);
+    let msg = `Your answer length: ${ans.length} chars.<br/>Similarity vs reference: ${Math.round(sim*100)}%.<br/>Reference: ${s.en}`;
+    let cls = "status warn";
+    if (sim > 0.75) cls = "status good";
+    else if (sim < 0.4) cls = "status bad";
+    rdFeedbackEl.innerHTML = msg;
+    rdFeedbackEl.className = cls;
+  } else {
+    // no reference EN (Caixin headline)
+    const lenScore = ans.length;
+    let msg = `No stored reference translation for this sentence (RSS headline).<br/>
+               You wrote ${lenScore} characters of explanation. Use this as self-assessment.`;
+    rdFeedbackEl.innerHTML = msg;
+    rdFeedbackEl.className = "status";
+  }
+});
+
 rdRefreshBtn.addEventListener("click", async () => {
   await refreshCaixinSentences(true);
   rdIndex = 0;
   renderReading();
 });
 
-/*
-  ========================================
-  Speaking tab: target, TTS, recognition
-  ========================================
-*/
-const spTargetEl    = document.getElementById("sp-target");
-const spAudioBtn    = document.getElementById("sp-audio-btn");
-const spNewBtn      = document.getElementById("sp-new-btn");
-const spStartBtn    = document.getElementById("sp-start-btn");
-const spStopBtn     = document.getElementById("sp-stop-btn");
-const spClearBtn    = document.getElementById("sp-clear-btn");
-const spTextEl      = document.getElementById("sp-recognized");
-const spStatusEl    = document.getElementById("sp-status");
+/* ===============================
+   Speaking
+   =============================== */
+const spTargetEl  = document.getElementById("sp-target");
+const spAudioBtn  = document.getElementById("sp-audio-btn");
+const spNewBtn    = document.getElementById("sp-new-btn");
+const spStartBtn  = document.getElementById("sp-start-btn");
+const spStopBtn   = document.getElementById("sp-stop-btn");
+const spClearBtn  = document.getElementById("sp-clear-btn");
+const spTextEl    = document.getElementById("sp-recognized");
+const spStatusEl  = document.getElementById("sp-status");
 
 let speechRecognition = null;
 let recognizing = false;
 let spCurrent = null;
 
 function pickSpeakingSentence() {
-  if (readingSentences.length === 0) return;
+  if (!readingSentences.length) return;
   const idx = Math.floor(Math.random() * readingSentences.length);
   spCurrent = readingSentences[idx];
   spTargetEl.innerHTML = `
@@ -738,11 +734,11 @@ function initSpeechRecognition() {
 }
 
 function evaluatePronunciation(target, recognized) {
-  const normalizeZh = s => (s || "").replace(/\s+/g, "").toLowerCase();
-  const t = normalizeZh(target);
-  const r = normalizeZh(recognized);
+  const norm = s => (s || "").replace(/\s+/g,"").toLowerCase();
+  const t = norm(target);
+  const r = norm(recognized);
   if (!r) {
-    spStatusEl.textContent = "No speech recognized. Try again closer to the mic.";
+    spStatusEl.textContent = "No speech recognized. Try again a bit closer to the mic.";
     spStatusEl.className = "status warn";
     return;
   }
@@ -810,11 +806,9 @@ spStopBtn.addEventListener("click", () => {
   }
 });
 
-/*
-  ========================================
-  Tabs setup & initial bootstrap
-  ========================================
-*/
+/* ===============================
+   Tabs & init
+   =============================== */
 const tabButtons = document.querySelectorAll(".tab-btn");
 const flashcardsSection = document.getElementById("flashcards");
 const readingSection    = document.getElementById("reading");
@@ -831,15 +825,11 @@ tabButtons.forEach(btn => {
   });
 });
 
-// initial render
 (async function init() {
-  // Preload TTS voices for better zh-CN selection
   if ("speechSynthesis" in window) {
     window.speechSynthesis.onvoiceschanged = () => {};
   }
-  // Attempt to refresh Caixin sentences (cached if <24h)
   await refreshCaixinSentences(false);
-  // Flashcards, reading, speaking
   fcOrder = getDueOrder();
   fcIndex = 0;
   renderFlashcard();
