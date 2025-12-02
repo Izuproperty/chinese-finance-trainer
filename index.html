@@ -198,7 +198,9 @@
       <!-- populated by JS -->
     </div>
     <div class="controls">
-      <button id="show-answer-btn" class="primary">Show / Hide Answer</button>
+      <button id="check-pinyin-btn" class="primary">Check pinyin</button>
+      <button id="check-tones-btn">Check tones</button>
+      <button id="show-answer-btn">Show full answer</button>
       <button id="next-card-btn">Next</button>
       <button id="known-btn">I knew it</button>
       <button id="learning-btn">Still learning</button>
@@ -206,7 +208,7 @@
     <div class="field-label">Add custom term</div>
     <div class="controls" style="flex-direction: column; align-items: stretch;">
       <input type="text" id="new-zh" placeholder="中文 (e.g., 资产管理)" />
-      <input type="text" id="new-py" placeholder="Pinyin (e.g., zīchǎn guǎnlǐ)" />
+      <input type="text" id="new-py" placeholder="Pinyin with tones (e.g., zīchǎn guǎnlǐ)" />
       <input type="text" id="new-en" placeholder="English meaning (e.g., asset management)" />
       <button id="add-term-btn">Add to deck</button>
     </div>
@@ -307,7 +309,72 @@
   ];
 
   // -----------------------------
-  // TAB LOGIC
+  // UTILS – PINYIN NORMALIZATION & TONES
+  // -----------------------------
+
+  const diacriticMap = {
+    'ā': { base: 'a', tone: 1 }, 'á': { base: 'a', tone: 2 }, 'ǎ': { base: 'a', tone: 3 }, 'à': { base: 'a', tone: 4 },
+    'ē': { base: 'e', tone: 1 }, 'é': { base: 'e', tone: 2 }, 'ě': { base: 'e', tone: 3 }, 'è': { base: 'e', tone: 4 },
+    'ī': { base: 'i', tone: 1 }, 'í': { base: 'i', tone: 2 }, 'ǐ': { base: 'i', tone: 3 }, 'ì': { base: 'i', tone: 4 },
+    'ō': { base: 'o', tone: 1 }, 'ó': { base: 'o', tone: 2 }, 'ǒ': { base: 'o', tone: 3 }, 'ò': { base: 'o', tone: 4 },
+    'ū': { base: 'u', tone: 1 }, 'ú': { base: 'u', tone: 2 }, 'ǔ': { base: 'u', tone: 3 }, 'ù': { base: 'u', tone: 4 },
+    'ǖ': { base: 'ü', tone: 1 }, 'ǘ': { base: 'ü', tone: 2 }, 'ǚ': { base: 'ü', tone: 3 }, 'ǜ': { base: 'ü', tone: 4 }
+  };
+
+  function normalizePinyinPlain(str) {
+    if (!str) return "";
+    let out = "";
+    for (const ch of str.toLowerCase()) {
+      if (diacriticMap[ch]) {
+        out += diacriticMap[ch].base;
+      } else if (ch >= '0' && ch <= '9') {
+        // ignore tone digits
+      } else if (ch === ' ' || ch === "'" || ch === "’" || ch === "，" || ch === ",") {
+        // ignore
+      } else {
+        out += ch;
+      }
+    }
+    return out;
+  }
+
+  function parsePinyinWithTones(pinyin) {
+    if (!pinyin) return null;
+    const syllablesRaw = pinyin.trim().split(/\s+/);
+    const syllables = [];
+    const tones = [];
+    for (let syl of syllablesRaw) {
+      let tone = 0;
+      let baseSyl = "";
+      for (const ch of syl) {
+        if (diacriticMap[ch]) {
+          baseSyl += diacriticMap[ch].base;
+          tone = diacriticMap[ch].tone;
+        } else if (/[1-4]/.test(ch)) {
+          tone = parseInt(ch, 10);
+        } else {
+          baseSyl += ch;
+        }
+      }
+      baseSyl = baseSyl.toLowerCase();
+      baseSyl = baseSyl.replace(/[^a-zü]/g, "");
+      syllables.push(baseSyl || syl.toLowerCase());
+      tones.push(tone);
+    }
+    return { syllables, tones };
+  }
+
+  function similarityRatio(a, b) {
+    const len = Math.max(a.length, b.length) || 1;
+    let score = 0;
+    for (let i = 0; i < Math.min(a.length, b.length); i++) {
+      if (a[i] === b[i]) score++;
+    }
+    return score / len;
+  }
+
+  // -----------------------------
+  // TABS
   // -----------------------------
   const tabButtons = document.querySelectorAll('.tab-btn');
   const sections = {
@@ -359,6 +426,36 @@
     progressEl.textContent = `${knownCount} known · ${terms.length} total`;
   }
 
+  function buildToneQuiz(term) {
+    const toneQuizEl = document.getElementById('tone-quiz');
+    const parsed = parsePinyinWithTones(term.pinyin);
+    if (!parsed) {
+      toneQuizEl.innerHTML = '<div class="muted">No tone quiz for this item.</div>';
+      return;
+    }
+    const { syllables } = parsed;
+    let html = `<div class="field-label">Tone quiz</div>`;
+    html += `<div class="muted" style="margin-bottom:4px;">Choose the tone (1–4, or 0 for neutral) for each syllable.</div>`;
+    html += `<div style="display:flex;flex-wrap:wrap;gap:8px;">`;
+    syllables.forEach((syl, idx) => {
+      html += `
+        <label style="font-size:0.85rem;">
+          <span>Syllable ${idx + 1}: <strong>${syl}</strong></span><br/>
+          <select data-syllable-index="${idx}">
+            <option value="">?</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="0">0</option>
+          </select>
+        </label>
+      `;
+    });
+    html += `</div>`;
+    toneQuizEl.innerHTML = html;
+  }
+
   function renderFlashcard() {
     const term = terms[currentIndex];
     if (!term) {
@@ -370,17 +467,25 @@
 
     flashcardContentEl.innerHTML = `
       <div class="highlight-zh">${term.zh}</div>
+      <div class="field-label">Type pinyin (tones optional)</div>
+      <input type="text" id="pinyin-input" placeholder="e.g., gǔpiào / gu3piao4 / gupiao" />
       ${showAnswer ? `
-        <div class="highlight-py">${term.pinyin}</div>
+        <div class="highlight-py" style="margin-top:8px;">${term.pinyin}</div>
         <div class="highlight-en">${term.en}</div>
       ` : `
-        <div class="muted">Press “Show / Hide Answer” to see pinyin and English.</div>
+        <div class="muted" style="margin-top:8px;">
+          Press “Check pinyin” to test yourself, then “Check tones” for a tone drill.
+        </div>
       `}
+      <div id="tone-quiz" style="margin-top:8px;"></div>
+      <div id="flashcard-feedback" class="status"></div>
       <div style="margin-top:8px;">
         <span class="badge">Status: ${statusLabel}</span>
         <span class="badge">Card ${currentIndex + 1} / ${terms.length}</span>
       </div>
     `;
+
+    buildToneQuiz(term);
     updateProgressBadge();
   }
 
@@ -430,12 +535,79 @@
     renderFlashcard();
   });
 
+  // NEW: Check pinyin (typing)
+  document.getElementById('check-pinyin-btn').addEventListener('click', () => {
+    const term = terms[currentIndex];
+    if (!term) return;
+    const inputEl = document.getElementById('pinyin-input');
+    const fbEl = document.getElementById('flashcard-feedback');
+    const user = (inputEl.value || "").trim();
+    if (!user) {
+      fbEl.textContent = "Type something first.";
+      fbEl.className = "status warn";
+      return;
+    }
+    const userNorm = normalizePinyinPlain(user);
+    const targetNorm = normalizePinyinPlain(term.pinyin);
+    const ratio = similarityRatio(userNorm, targetNorm);
+
+    if (ratio > 0.85) {
+      fbEl.textContent = `Excellent – pinyin looks correct. Correct answer: ${term.pinyin} — ${term.en}`;
+      fbEl.className = "status good";
+    } else if (ratio > 0.6) {
+      fbEl.textContent = `Close – some letters differ. Correct answer: ${term.pinyin} — ${term.en}`;
+      fbEl.className = "status warn";
+    } else {
+      fbEl.textContent = `Not quite. Correct pinyin: ${term.pinyin} — ${term.en}`;
+      fbEl.className = "status bad";
+    }
+  });
+
+  // NEW: Check tones
+  document.getElementById('check-tones-btn').addEventListener('click', () => {
+    const term = terms[currentIndex];
+    if (!term) return;
+    const parsed = parsePinyinWithTones(term.pinyin);
+    const fbEl = document.getElementById('flashcard-feedback');
+    if (!parsed) {
+      fbEl.textContent = "No tone data for this entry.";
+      fbEl.className = "status warn";
+      return;
+    }
+    const selects = document.querySelectorAll('#tone-quiz select[data-syllable-index]');
+    let allAnswered = true;
+    const answers = [];
+    selects.forEach(sel => {
+      const v = sel.value;
+      if (v === "") allAnswered = false;
+      answers.push(v === "" ? null : parseInt(v, 10));
+    });
+    if (!allAnswered) {
+      fbEl.textContent = "Choose a tone for each syllable (1–4 or 0).";
+      fbEl.className = "status warn";
+      return;
+    }
+
+    let correctCount = 0;
+    parsed.tones.forEach((t, idx) => {
+      if (t === answers[idx]) correctCount++;
+    });
+
+    if (correctCount === parsed.tones.length) {
+      fbEl.textContent = `All tones correct. ✅ ${term.pinyin}`;
+      fbEl.className = "status good";
+    } else {
+      fbEl.textContent = `Tones off: you got ${correctCount}/${parsed.tones.length}. Correct tones are in: ${term.pinyin}`;
+      fbEl.className = "status bad";
+    }
+  });
+
   // -----------------------------
   // READING
   // -----------------------------
   let readingSentences = INITIAL_SENTENCES.slice();
   let readingIndex = 0;
-  let showPinyin = false;
+  let showPinyinReading = false;
   let showTranslation = false;
 
   const readingContentEl = document.getElementById('reading-content');
@@ -444,7 +616,7 @@
     const s = readingSentences[readingIndex];
     readingContentEl.innerHTML = `
       <div class="highlight-zh">${s.zh}</div>
-      ${showPinyin ? `<div class="highlight-py">${s.pinyin}</div>` : `<div class="muted">Pinyin hidden</div>`}
+      ${showPinyinReading ? `<div class="highlight-py">${s.pinyin}</div>` : `<div class="muted">Pinyin hidden</div>`}
       ${showTranslation ? `<div class="highlight-en">${s.en}</div>` : `<div class="muted">Translation hidden</div>`}
       <div style="margin-top:8px;">
         <span class="badge">Sentence ${readingIndex + 1} / ${readingSentences.length}</span>
@@ -453,7 +625,7 @@
   }
 
   document.getElementById('toggle-pinyin-btn').addEventListener('click', () => {
-    showPinyin = !showPinyin;
+    showPinyinReading = !showPinyinReading;
     renderReading();
   });
 
@@ -467,19 +639,8 @@
     renderReading();
   });
 
-  // Placeholder for web refresh – you can plug in your own API here.
   document.getElementById('refresh-from-web-btn').addEventListener('click', async () => {
     alert("This is a placeholder. Hook this to your preferred Chinese finance news API.");
-    // Example sketch (you must replace URL and parsing logic):
-    // const res = await fetch("YOUR_API_ENDPOINT");
-    // const data = await res.json();
-    // readingSentences = data.items.map(item => ({
-    //   zh: item.chineseSentence,
-    //   pinyin: item.pinyin || "",
-    //   en: item.english || ""
-    // }));
-    // readingIndex = 0;
-    // renderReading();
   });
 
   // -----------------------------
@@ -494,7 +655,6 @@
   let recognizing = false;
 
   function pickSpeakingSentence() {
-    // reuse reading sentences for speaking practice
     const idx = Math.floor(Math.random() * readingSentences.length);
     speechTarget = readingSentences[idx];
     speakingTargetEl.innerHTML = `
@@ -523,11 +683,11 @@
   }
 
   function evaluatePronunciation(targetText, recognized) {
-    const normalize = s => (s || "")
+    const normalizeZh = s => (s || "")
       .replace(/\s+/g, "")
       .toLowerCase();
-    const target = normalize(targetText);
-    const said = normalize(recognized);
+    const target = normalizeZh(targetText);
+    const said = normalizeZh(recognized);
 
     if (!said) {
       speechStatusEl.textContent = "No speech recognized. Try again a bit louder and closer to the mic.";
@@ -557,7 +717,7 @@
     if (!recognition) recognition = initSpeechRecognition();
     if (!recognition) return;
 
-    if (recognizing) return; // already running
+    if (recognizing) return;
     recognizing = true;
     recognizedTextEl.value = "";
     speechStatusEl.textContent = "Listening… speak now.";
